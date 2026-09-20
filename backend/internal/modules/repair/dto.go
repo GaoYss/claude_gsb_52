@@ -37,6 +37,13 @@ type FinishRequest struct {
 	Remark     string   `json:"remark" binding:"omitempty,max=255"`
 }
 
+// ReworkRequest 返修请求, 由回访模块在判定不合格时发起。
+// 维修人员缺省时沿用原维修记录的维修人员与班组。
+type ReworkRequest struct {
+	Repairman string `json:"repairman" binding:"omitempty,max=64"`
+	Reason    string `json:"reason" binding:"omitempty,max=512"`
+}
+
 // ListQuery 维修记录查询条件。
 type ListQuery struct {
 	pagination.Params
@@ -47,6 +54,7 @@ type ListQuery struct {
 	RepairTeam string `form:"repair_team"`
 	Status     string `form:"status"`
 	Result     string `form:"result"`
+	OnlyRework bool   `form:"only_rework"` // 仅查询返修记录
 	StartDate  string `form:"start_date"`
 	EndDate    string `form:"end_date"`
 }
@@ -64,6 +72,7 @@ type Statistics struct {
 	Total             int64   `json:"total"`
 	OngoingTotal      int64   `json:"ongoing_total"`
 	FinishedTotal     int64   `json:"finished_total"`
+	ReworkTotal       int64   `json:"rework_total"`
 	TotalCost         float64 `json:"total_cost"`
 	AverageCost       float64 `json:"average_cost"`
 	AverageDurationHr float64 `json:"average_duration_hours"`

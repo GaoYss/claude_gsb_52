@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"streetlight/internal/modules/callback"
 	"streetlight/internal/modules/fault"
 	"streetlight/internal/modules/lamp"
 	"streetlight/internal/modules/repair"
@@ -38,6 +39,19 @@ type seedFaultCase struct {
 	status      string
 	closed      bool
 	repairs     []seedRepairCase
+}
+
+// seedCallbackCase 描述一条演示回访任务, 通过 caseIndex + repairPos 关联维修记录。
+type seedCallbackCase struct {
+	caseIndex    int
+	repairPos    int
+	contact      string
+	satisfaction string
+	verdict      string
+	visitor      string
+	visitedAgo   time.Duration // 为 0 表示待回访
+	feedback     string
+	reworkPos    int // 判定不合格时触发的返修记录位置, -1 表示未触发
 }
 
 // seed 在数据库为空时写入演示数据, 便于启动后立即体验完整业务流程。
@@ -142,6 +156,26 @@ func seed(db *gorm.DB) error {
 		}
 	}
 
+	// 返修关联: 故障 11 的第二次维修是回访不合格触发的返修, 关联第一次维修记录。
+	reworkLinks := map[[2]int]int{{11, 1}: 0}
+	for link, originalPos := range reworkLinks {
+		start := repairRanges[link[0]][0]
+		rework := repairs[start+link[1]]
+		original := repairs[start+originalPos]
+		err := db.Model(&repair.Repair{}).Where("id = ?", rework.ID).
+			Updates(map[string]any{"rework_of_id": original.ID, "rework_of_no": original.RepairNo}).Error
+		if err != nil {
+			return fmt.Errorf("回填返修关联失败: %w", err)
+		}
+	}
+
+	callbacks := buildSeedCallbacks(now, faults, repairs, repairRanges)
+	if len(callbacks) > 0 {
+		if err := db.Create(&callbacks).Error; err != nil {
+			return fmt.Errorf("写入回访任务演示数据失败: %w", err)
+		}
+	}
+
 	if err := syncSeedLampStatus(db, faults, lamps); err != nil {
 		return err
 	}
@@ -150,8 +184,83 @@ func seed(db *gorm.DB) error {
 		"路灯", len(lamps),
 		"故障", len(faults),
 		"维修记录", len(repairs),
+		"回访任务", len(callbacks),
 	)
 	return nil
+}
+
+// buildSeedCallbacks 生成演示回访任务, 覆盖待回访 / 回访合格 / 回访不合格触发返修三种场景。
+func buildSeedCallbacks(now time.Time, faults []fault.Fault, repairs []repair.Repair, repairRanges [][2]int) []callback.Callback {
+	cases := []seedCallbackCase{
+		{caseIndex: 5, repairPos: 0, contact: callback.ContactReached, satisfaction: callback.SatisfactionSatisfied,
+			verdict: callback.VerdictQualified, visitor: "张敏", visitedAgo: 18 * hour,
+			feedback: "市民确认夜间照明已恢复, 对处理效率满意", reworkPos: -1},
+		{caseIndex: 6, repairPos: 0, reworkPos: -1}, // 待回访
+		{caseIndex: 7, repairPos: 0, contact: callback.ContactReached, satisfaction: callback.SatisfactionSatisfied,
+			verdict: callback.VerdictQualified, visitor: "张敏", visitedAgo: 55 * hour,
+			feedback: "现场复核灯杆垂直度合格, 市民满意", reworkPos: -1},
+		{caseIndex: 8, repairPos: 0, contact: callback.ContactReached, satisfaction: callback.SatisfactionSatisfied,
+			verdict: callback.VerdictQualified, visitor: "张敏", visitedAgo: 85 * hour,
+			feedback: "回路电流恢复正常, 回访合格", reworkPos: -1},
+		{caseIndex: 9, repairPos: 0, contact: callback.ContactReached, satisfaction: callback.SatisfactionNeutral,
+			verdict: callback.VerdictQualified, visitor: "张敏", visitedAgo: 108 * hour,
+			feedback: "照明已恢复, 市民建议加强该路段巡检频次", reworkPos: -1},
+		{caseIndex: 10, repairPos: 1, contact: callback.ContactReached, satisfaction: callback.SatisfactionSatisfied,
+			verdict: callback.VerdictQualified, visitor: "张敏", visitedAgo: 115 * hour,
+			feedback: "电缆更换后绝缘测试合格, 市民确认恢复", reworkPos: -1},
+		{caseIndex: 11, repairPos: 0, contact: callback.ContactReached, satisfaction: callback.SatisfactionUnsatisfied,
+			verdict: callback.VerdictUnqualified, visitor: "张敏", visitedAgo: 6 * hour,
+			feedback: "市民反映灯具白天仍偶发常亮, 要求进一步处理", reworkPos: 1},
+		{caseIndex: 11, repairPos: 1, reworkPos: -1}, // 返修完工后生成的第二轮回访, 待回访
+	}
+
+	sequences := map[string]int{}
+	rounds := map[uint]int{}
+	result := make([]callback.Callback, 0, len(cases))
+	for _, item := range cases {
+		target := faults[item.caseIndex]
+		record := repairs[repairRanges[item.caseIndex][0]+item.repairPos]
+		rounds[target.ID]++
+
+		createdAt := now
+		if record.FinishedAt != nil {
+			createdAt = *record.FinishedAt
+		}
+		prefix := "HF" + createdAt.Format("20060102")
+		sequences[prefix]++
+
+		task := callback.Callback{
+			CallbackNo: fmt.Sprintf("%s%04d", prefix, sequences[prefix]),
+			FaultID:    target.ID,
+			FaultNo:    target.FaultNo,
+			RepairID:   record.ID,
+			RepairNo:   record.RepairNo,
+			LampID:     record.LampID,
+			LampCode:   record.LampCode,
+			Round:      rounds[target.ID],
+			Status:     callback.StatusPending,
+			CreatedAt:  createdAt,
+			UpdatedAt:  createdAt,
+		}
+		if item.visitedAgo > 0 {
+			visitedAt := now.Add(-item.visitedAgo)
+			task.Status = callback.StatusCompleted
+			task.ContactResult = item.contact
+			task.Satisfaction = item.satisfaction
+			task.Verdict = item.verdict
+			task.Visitor = item.visitor
+			task.VisitedAt = &visitedAt
+			task.Feedback = item.feedback
+			task.UpdatedAt = visitedAt
+		}
+		if item.reworkPos >= 0 {
+			rework := repairs[repairRanges[item.caseIndex][0]+item.reworkPos]
+			task.ReworkRepairID = &rework.ID
+			task.ReworkRepairNo = rework.RepairNo
+		}
+		result = append(result, task)
+	}
+	return result
 }
 
 // buildSeedLamps 生成 6 条道路共 30 盏路灯的台账数据。
@@ -323,9 +432,14 @@ func seedFaultCases() []seedFaultCase {
 			reportedAgo: 10 * hour, status: fault.StatusRepaired,
 			repairs: []seedRepairCase{
 				{
-					repairman: "陈鹏", team: "市政照明二班", startedAgo: 9 * hour, finishedAgo: 7 * hour,
+					repairman: "陈鹏", team: "市政照明二班", startedAgo: 9 * hour, finishedAgo: 8 * hour,
 					result: repair.ResultFixed, content: "更换接触器, 恢复远程开关灯控制",
 					materials: "交流接触器 1 只", cost: 150,
+				},
+				{
+					repairman: "陈鹏", team: "市政照明二班", startedAgo: 5 * hour, finishedAgo: 3 * hour,
+					result: repair.ResultFixed, content: "返修: 回访反映仍偶发常亮, 更换计时控制器并复测开关灯逻辑",
+					materials: "计时控制器 1 只", cost: 120,
 				},
 			},
 		},

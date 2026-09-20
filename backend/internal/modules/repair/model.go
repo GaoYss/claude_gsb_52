@@ -37,6 +37,7 @@ func IsValidResult(result string) bool {
 }
 
 // Repair 维修记录, 一条记录对应故障的一次维修过程。
+// 返修记录通过 ReworkOfID 关联被判定不合格的原维修记录, 原记录的完工时间与处置内容保持不变。
 type Repair struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	RepairNo     string     `gorm:"size:64;uniqueIndex;not null" json:"repair_no"`
@@ -55,6 +56,8 @@ type Repair struct {
 	Materials    string     `gorm:"size:255" json:"materials"`
 	Cost         float64    `json:"cost"`
 	Remark       string     `gorm:"size:255" json:"remark"`
+	ReworkOfID   *uint      `gorm:"index" json:"rework_of_id"`
+	ReworkOfNo   string     `gorm:"size:64;index" json:"rework_of_no"`
 
 	// DurationMinutes 仅用于响应展示的维修耗时(分钟), 不落库。
 	DurationMinutes *int64 `gorm:"-" json:"duration_minutes,omitempty"`

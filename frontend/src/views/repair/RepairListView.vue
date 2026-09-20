@@ -26,6 +26,7 @@
           end-placeholder="开工结束日期"
           @change="handleSearch"
         />
+        <el-checkbox v-model="query.only_rework" @change="handleSearch">仅看返修</el-checkbox>
         <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
         <el-button :icon="RefreshLeft" @click="handleReset">重置</el-button>
       </div>
@@ -33,7 +34,14 @@
 
     <el-card shadow="never">
       <el-table v-loading="loading" :data="rows" stripe>
-        <el-table-column prop="repair_no" label="维修单号" width="140" fixed="left" />
+        <el-table-column label="维修单号" width="180" fixed="left">
+          <template #default="{ row }">
+            <span>{{ row.repair_no }}</span>
+            <el-tooltip v-if="row.rework_of_id" :content="`回访不合格返修, 原维修单 ${row.rework_of_no}`" placement="top">
+              <el-tag type="danger" effect="plain" size="small" class="rework-tag">返修</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="fault_no" label="故障单号" width="140" />
         <el-table-column prop="lamp_code" label="路灯编号" width="110" />
         <el-table-column prop="repairman" label="维修人员" width="100" />
@@ -110,6 +118,7 @@ const { loading, rows, total, query, load, search, reset, changePage, changePage
   status: '',
   result: '',
   repairman: '',
+  only_rework: false,
   start_date: '',
   end_date: '',
 })
@@ -182,10 +191,17 @@ function handleSaved() {
   dictStore.loadRepairMeta().catch(() => {})
 }
 
-// 支持从其它页面携带 fault_id 直接录入维修记录。
+// 支持从其它页面携带 fault_id 直接录入维修记录, 或携带 only_rework 过滤返修记录。
 async function applyRouteQuery() {
+  if (route.query.only_rework === 'true') {
+    query.only_rework = true
+    search()
+  }
   const faultId = Number(route.query.fault_id)
-  if (!faultId) return
+  if (!faultId) {
+    if (route.query.only_rework) router.replace({ path: '/repairs' })
+    return
+  }
   editing.value = null
   formVisible.value = true
   router.replace({ path: '/repairs' })
@@ -196,3 +212,9 @@ onMounted(async () => {
   await applyRouteQuery()
 })
 </script>
+
+<style scoped>
+.rework-tag {
+  margin-left: 6px;
+}
+</style>

@@ -39,6 +39,22 @@
         :hint="`今日完成维修 ${overview.repair.today_finished} 次`"
       />
       <StatCard
+        label="返修次数"
+        :value="overview.repair.rework_total"
+        suffix="次"
+        icon="RefreshLeft"
+        color="#f56c6c"
+        :hint="`回访不合格 ${overview.callback.unqualified_total} 次`"
+      />
+      <StatCard
+        label="待回访任务"
+        :value="overview.callback.pending_total"
+        suffix="个"
+        icon="Phone"
+        color="#e6a23c"
+        :hint="`累计回访 ${overview.callback.total} 次 / 完成 ${overview.callback.completed_total} 次`"
+      />
+      <StatCard
         label="维修费用合计"
         :value="overview.repair.total_cost"
         suffix="元"
@@ -144,7 +160,8 @@ const loading = ref(false)
 const emptyOverview = () => ({
   lamp: { total: 0, road_count: 0, by_run_status: {} },
   fault: { total: 0, open_total: 0, by_status: {}, today_reported: 0, overdue_total: 0 },
-  repair: { total: 0, ongoing_total: 0, finished_total: 0, today_finished: 0, average_duration_hours: 0, total_cost: 0 },
+  repair: { total: 0, ongoing_total: 0, finished_total: 0, rework_total: 0, today_finished: 0, average_duration_hours: 0, total_cost: 0 },
+  callback: { total: 0, pending_total: 0, completed_total: 0, unqualified_total: 0 },
   fault_by_type: [],
   fault_by_level: [],
   top_roads: [],

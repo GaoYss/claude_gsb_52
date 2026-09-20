@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"streetlight/internal/apperr"
+	"streetlight/internal/modules/callback"
 	"streetlight/internal/modules/fault"
 	"streetlight/internal/modules/lamp"
 	"streetlight/internal/modules/repair"
@@ -49,17 +50,18 @@ type TrackQuery struct {
 }
 
 // Service 提供跨模块的维修状态查询能力(只读)。
-// 作为读模型, 它直接基于 lamp / fault / repair 三张表组装视图, 避免不必要的多次往返查询。
+// 作为读模型, 它直接基于 lamp / fault / repair / callback 四张表组装视图, 避免不必要的多次往返查询。
 type Service struct {
-	db      *gorm.DB
-	lamps   *lamp.Repository
-	faults  *fault.Repository
-	repairs *repair.Repository
+	db        *gorm.DB
+	lamps     *lamp.Repository
+	faults    *fault.Repository
+	repairs   *repair.Repository
+	callbacks *callback.Repository
 }
 
 // NewService 构造维修状态查询服务。
-func NewService(db *gorm.DB, lamps *lamp.Repository, faults *fault.Repository, repairs *repair.Repository) *Service {
-	return &Service{db: db, lamps: lamps, faults: faults, repairs: repairs}
+func NewService(db *gorm.DB, lamps *lamp.Repository, faults *fault.Repository, repairs *repair.Repository, callbacks *callback.Repository) *Service {
+	return &Service{db: db, lamps: lamps, faults: faults, repairs: repairs, callbacks: callbacks}
 }
 
 // Overview 汇总维修状态看板数据。
@@ -135,6 +137,23 @@ func (s *Service) Overview(ctx context.Context) (*Overview, error) {
 	if err != nil {
 		return nil, err
 	}
+	reworkTotal, err := s.repairs.CountRework(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	callbackTotal, err := s.callbacks.Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+	callbackByStatus, err := s.callbacks.CountByColumn(ctx, "status")
+	if err != nil {
+		return nil, err
+	}
+	callbackByVerdict, err := s.callbacks.CountByColumn(ctx, "verdict")
+	if err != nil {
+		return nil, err
+	}
 
 	recentFaults, err := s.faults.ListRecent(ctx, 8)
 	if err != nil {
@@ -162,9 +181,16 @@ func (s *Service) Overview(ctx context.Context) (*Overview, error) {
 			Total:             repairTotal,
 			OngoingTotal:      repairByStatus[repair.StatusOngoing],
 			FinishedTotal:     repairByStatus[repair.StatusFinished],
+			ReworkTotal:       reworkTotal,
 			TodayFinished:     todayFinished,
 			AverageDurationHr: round2(averageDuration),
 			TotalCost:         round2(totalCost),
+		},
+		Callback: CallbackSummary{
+			Total:            callbackTotal,
+			PendingTotal:     callbackByStatus[callback.StatusPending],
+			CompletedTotal:   callbackByStatus[callback.StatusCompleted],
+			UnqualifiedTotal: callbackByVerdict[callback.VerdictUnqualified],
 		},
 		FaultByType:   topCounts(faultByType, 0),
 		FaultByLevel:  orderedCounts(faultByLevel, fault.Levels()),
@@ -307,6 +333,7 @@ func (s *Service) Track(ctx context.Context, query TrackQuery) (*TrackResult, er
 			SearchType:    "lamp",
 			Lamp:          device,
 			Repairs:       make([]repair.Repair, 0),
+			Callbacks:     make([]callback.Callback, 0),
 			Timeline:      make([]TimelineEvent, 0),
 			RelatedFaults: toBriefs(history),
 		}
@@ -316,9 +343,14 @@ func (s *Service) Track(ctx context.Context, query TrackQuery) (*TrackResult, er
 			if err != nil {
 				return nil, err
 			}
+			callbacks, err := s.callbacks.ListByFault(ctx, latest.ID)
+			if err != nil {
+				return nil, err
+			}
 			result.Fault = &latest
 			result.Repairs = repairs
-			result.Timeline = buildTimeline(&latest, repairs)
+			result.Callbacks = callbacks
+			result.Timeline = buildTimeline(&latest, repairs, callbacks)
 		}
 		return result, nil
 
@@ -337,12 +369,17 @@ func (s *Service) buildFaultTrack(ctx context.Context, entity *fault.Fault) (*Tr
 	if err != nil {
 		return nil, err
 	}
+	callbacks, err := s.callbacks.ListByFault(ctx, entity.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &TrackResult{
 		SearchType: "fault",
 		Lamp:       device,
 		Fault:      entity,
 		Repairs:    repairs,
-		Timeline:   buildTimeline(entity, repairs),
+		Callbacks:  callbacks,
+		Timeline:   buildTimeline(entity, repairs, callbacks),
 	}, nil
 }
 
@@ -411,9 +448,9 @@ func (s *Service) latestRepairs(ctx context.Context, lampIDs []uint) (map[uint]r
 	return result, nil
 }
 
-// buildTimeline 依据故障与维修记录构建处置时间线。
-func buildTimeline(entity *fault.Fault, repairs []repair.Repair) []TimelineEvent {
-	events := make([]TimelineEvent, 0, len(repairs)*2+2)
+// buildTimeline 依据故障、维修记录与回访任务构建处置时间线。
+func buildTimeline(entity *fault.Fault, repairs []repair.Repair, callbacks []callback.Callback) []TimelineEvent {
+	events := make([]TimelineEvent, 0, len(repairs)*2+len(callbacks)+2)
 
 	events = append(events, TimelineEvent{
 		Stage:     "reported",
@@ -424,9 +461,13 @@ func buildTimeline(entity *fault.Fault, repairs []repair.Repair) []TimelineEvent
 	})
 
 	for _, item := range repairs {
+		startLabel := "维修开工"
+		if item.ReworkOfID != nil {
+			startLabel = "返修开工"
+		}
 		events = append(events, TimelineEvent{
 			Stage:     "repair_started",
-			Label:     "维修开工",
+			Label:     startLabel,
 			Operator:  item.Repairman,
 			Detail:    strings.TrimSpace(item.RepairNo + " " + item.Content),
 			Timestamp: item.StartedAt,
@@ -447,6 +488,31 @@ func buildTimeline(entity *fault.Fault, repairs []repair.Repair) []TimelineEvent
 				Timestamp: *item.FinishedAt,
 			})
 		}
+	}
+
+	for _, task := range callbacks {
+		if task.Status != callback.StatusCompleted || task.VisitedAt == nil {
+			continue
+		}
+		detail := strings.TrimSpace("联系情况: " + callback.ContactResultLabel(task.ContactResult) +
+			" 满意度: " + callback.SatisfactionLabel(task.Satisfaction))
+		stage := "callback_qualified"
+		label := "质量回访"
+		if task.Verdict == callback.VerdictUnqualified {
+			stage = "callback_unqualified"
+			label = "回访不合格"
+			detail = strings.TrimSpace(detail + " 已触发返修 " + task.ReworkRepairNo)
+		}
+		if task.Feedback != "" {
+			detail = strings.TrimSpace(detail + " 反馈: " + task.Feedback)
+		}
+		events = append(events, TimelineEvent{
+			Stage:     stage,
+			Label:     label,
+			Operator:  task.Visitor,
+			Detail:    detail,
+			Timestamp: *task.VisitedAt,
+		})
 	}
 
 	if entity.ClosedAt != nil {

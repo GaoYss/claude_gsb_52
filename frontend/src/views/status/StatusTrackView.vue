@@ -79,7 +79,14 @@
       <el-card shadow="never">
         <div class="section-title">维修记录明细</div>
         <el-table :data="result.repairs" size="small" border>
-          <el-table-column prop="repair_no" label="维修单号" width="150" />
+          <el-table-column label="维修单号" width="170">
+            <template #default="{ row }">
+              <span>{{ row.repair_no }}</span>
+              <el-tooltip v-if="row.rework_of_id" :content="`回访不合格返修, 原维修单 ${row.rework_of_no}`" placement="top">
+                <el-tag type="danger" effect="plain" size="small" class="rework-tag">返修</el-tag>
+              </el-tooltip>
+            </template>
+          </el-table-column>
           <el-table-column prop="repairman" label="维修人员" width="110" />
           <el-table-column prop="repair_team" label="班组" width="140" />
           <el-table-column label="状态" width="100">
@@ -101,6 +108,41 @@
           <el-table-column label="费用" width="100">
             <template #default="{ row }">{{ formatMoney(row.cost) }}</template>
           </el-table-column>
+        </el-table>
+      </el-card>
+
+      <el-card v-if="result.callbacks?.length" shadow="never">
+        <div class="section-title">质量回访记录</div>
+        <el-table :data="result.callbacks" size="small" border>
+          <el-table-column prop="callback_no" label="回访单号" width="150" />
+          <el-table-column label="轮次" width="80" align="center">
+            <template #default="{ row }">第 {{ row.round }} 轮</template>
+          </el-table-column>
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }"><StatusTag :dict="CALLBACK_STATUS" :value="row.status" /></template>
+          </el-table-column>
+          <el-table-column label="联系情况" width="100">
+            <template #default="{ row }">{{ dictLabel(CALLBACK_CONTACT, row.contact_result) }}</template>
+          </el-table-column>
+          <el-table-column label="满意度" width="100">
+            <template #default="{ row }">{{ dictLabel(CALLBACK_SATISFACTION, row.satisfaction) }}</template>
+          </el-table-column>
+          <el-table-column label="判定" width="90">
+            <template #default="{ row }">
+              <StatusTag v-if="row.verdict" :dict="CALLBACK_VERDICT" :value="row.verdict" />
+              <span v-else class="text-muted">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="visitor" label="回访人" width="100">
+            <template #default="{ row }">{{ row.visitor || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="回访时间" width="150">
+            <template #default="{ row }">{{ formatDateTime(row.visited_at) }}</template>
+          </el-table-column>
+          <el-table-column label="关联返修" width="140">
+            <template #default="{ row }">{{ row.rework_repair_no || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="feedback" label="回访反馈" min-width="160" show-overflow-tooltip />
         </el-table>
       </el-card>
 
@@ -138,6 +180,10 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { statusApi } from '@/api/status'
 import {
+  CALLBACK_CONTACT,
+  CALLBACK_SATISFACTION,
+  CALLBACK_STATUS,
+  CALLBACK_VERDICT,
   FAULT_LEVEL,
   FAULT_SOURCE,
   FAULT_STATUS,
@@ -215,5 +261,9 @@ onMounted(() => {
 <style scoped>
 .timeline-title {
   font-weight: 600;
+}
+
+.rework-tag {
+  margin-left: 6px;
 }
 </style>

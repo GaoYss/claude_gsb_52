@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"streetlight/internal/modules/callback"
 	"streetlight/internal/modules/fault"
 	"streetlight/internal/modules/lamp"
 	"streetlight/internal/modules/repair"
@@ -15,9 +16,9 @@ type Module struct {
 	handler *Handler
 }
 
-// New 构造维修状态查询模块, 依赖路灯 / 故障 / 维修三个模块的只读仓储。
-func New(db *gorm.DB, lamps *lamp.Repository, faults *fault.Repository, repairs *repair.Repository) *Module {
-	service := NewService(db, lamps, faults, repairs)
+// New 构造维修状态查询模块, 依赖路灯 / 故障 / 维修 / 回访四个模块的只读仓储。
+func New(db *gorm.DB, lamps *lamp.Repository, faults *fault.Repository, repairs *repair.Repository, callbacks *callback.Repository) *Module {
+	service := NewService(db, lamps, faults, repairs, callbacks)
 	return &Module{service: service, handler: NewHandler(service)}
 }
 

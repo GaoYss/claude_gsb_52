@@ -57,7 +57,12 @@
 
         <div class="section-title drawer-block">维修记录</div>
         <el-table :data="detail.repairs" size="small" border>
-          <el-table-column prop="repair_no" label="维修单号" width="140" />
+          <el-table-column label="维修单号" width="160">
+            <template #default="{ row }">
+              <span>{{ row.repair_no }}</span>
+              <el-tag v-if="row.rework_of_id" type="danger" effect="plain" size="small" class="rework-tag">返修</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="repairman" label="维修人员" width="100" />
           <el-table-column label="状态" width="90">
             <template #default="{ row }"><StatusTag :dict="REPAIR_STATUS" :value="row.status" /></template>
@@ -73,6 +78,35 @@
           </el-table-column>
           <el-table-column prop="content" label="维修内容" min-width="160" show-overflow-tooltip />
         </el-table>
+
+        <template v-if="detail.callbacks?.length">
+          <div class="section-title drawer-block">质量回访记录</div>
+          <el-table :data="detail.callbacks" size="small" border>
+            <el-table-column prop="callback_no" label="回访单号" width="140" />
+            <el-table-column label="轮次" width="70" align="center">
+              <template #default="{ row }">第 {{ row.round }} 轮</template>
+            </el-table-column>
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }"><StatusTag :dict="CALLBACK_STATUS" :value="row.status" /></template>
+            </el-table-column>
+            <el-table-column label="满意度" width="90">
+              <template #default="{ row }">{{ dictLabel(CALLBACK_SATISFACTION, row.satisfaction) }}</template>
+            </el-table-column>
+            <el-table-column label="判定" width="90">
+              <template #default="{ row }">
+                <StatusTag v-if="row.verdict" :dict="CALLBACK_VERDICT" :value="row.verdict" />
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="visitor" label="回访人" width="90">
+              <template #default="{ row }">{{ row.visitor || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="回访时间" width="140">
+              <template #default="{ row }">{{ formatDateTime(row.visited_at) }}</template>
+            </el-table-column>
+            <el-table-column prop="feedback" label="回访反馈" min-width="140" show-overflow-tooltip />
+          </el-table>
+        </template>
       </template>
       <el-empty v-else description="暂无故障数据" />
     </div>
@@ -83,7 +117,7 @@
 import { ref } from 'vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { statusApi } from '@/api/status'
-import { FAULT_LEVEL, FAULT_SOURCE, FAULT_STATUS, REPAIR_RESULT, REPAIR_STATUS, RUN_STATUS, TIMELINE_STAGE, dictLabel, dictType } from '@/constants/dict'
+import { FAULT_LEVEL, FAULT_SOURCE, FAULT_STATUS, CALLBACK_SATISFACTION, CALLBACK_STATUS, CALLBACK_VERDICT, REPAIR_RESULT, REPAIR_STATUS, RUN_STATUS, TIMELINE_STAGE, dictLabel, dictType } from '@/constants/dict'
 import { formatDateTime } from '@/utils/format'
 
 const props = defineProps({
@@ -94,7 +128,7 @@ const props = defineProps({
 defineEmits(['update:modelValue'])
 
 const loading = ref(false)
-const detail = ref({ fault: null, lamp: null, repairs: [], timeline: [] })
+const detail = ref({ fault: null, lamp: null, repairs: [], callbacks: [], timeline: [] })
 
 // 打开抽屉时按故障 ID 拉取完整处理链路。
 async function load() {
@@ -103,7 +137,7 @@ async function load() {
   try {
     detail.value = await statusApi.track({ fault_id: props.faultId })
   } catch (error) {
-    detail.value = { fault: null, lamp: null, repairs: [], timeline: [] }
+    detail.value = { fault: null, lamp: null, repairs: [], callbacks: [], timeline: [] }
   } finally {
     loading.value = false
   }
@@ -121,5 +155,9 @@ async function load() {
 
 .timeline-detail {
   font-size: 13px;
+}
+
+.rework-tag {
+  margin-left: 6px;
 }
 </style>

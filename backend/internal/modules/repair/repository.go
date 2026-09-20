@@ -23,6 +23,7 @@ type Filter struct {
 	RepairTeam  string
 	Status      string
 	Result      string
+	OnlyRework  bool
 	StartedFrom *time.Time
 	StartedTo   *time.Time
 }
@@ -225,6 +226,16 @@ func (r *Repository) Count(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+// CountRework 统计返修记录数量(关联了原维修记录的记录)。
+func (r *Repository) CountRework(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.session(ctx).Model(&Repair{}).Where("rework_of_id IS NOT NULL").Count(&total).Error
+	if err != nil {
+		return 0, fmt.Errorf("统计返修记录失败: %w", err)
+	}
+	return total, nil
+}
+
 // CountFinishedBetween 统计完工时间落在区间内的维修记录数量。
 func (r *Repository) CountFinishedBetween(ctx context.Context, from, to time.Time) (int64, error) {
 	var total int64
@@ -318,6 +329,9 @@ func applyFilter(statement *gorm.DB, filter Filter) *gorm.DB {
 	}
 	if filter.Result != "" {
 		statement = statement.Where("result = ?", filter.Result)
+	}
+	if filter.OnlyRework {
+		statement = statement.Where("rework_of_id IS NOT NULL")
 	}
 	if filter.StartedFrom != nil {
 		statement = statement.Where("started_at >= ?", *filter.StartedFrom)

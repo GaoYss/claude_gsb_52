@@ -44,11 +44,39 @@ export const REPAIR_RESULT = {
   unfixable: { label: '无法修复', type: 'danger' },
 }
 
+// 回访任务状态。
+export const CALLBACK_STATUS = {
+  pending: { label: '待回访', type: 'warning' },
+  completed: { label: '已回访', type: 'success' },
+  cancelled: { label: '已取消', type: 'info' },
+}
+
+// 回访联系情况。
+export const CALLBACK_CONTACT = {
+  reached: { label: '已联系', type: 'success' },
+  unreachable: { label: '未联系上', type: 'warning' },
+}
+
+// 回访满意度。
+export const CALLBACK_SATISFACTION = {
+  satisfied: { label: '满意', type: 'success' },
+  neutral: { label: '基本满意', type: 'primary' },
+  unsatisfied: { label: '不满意', type: 'danger' },
+}
+
+// 回访判定。
+export const CALLBACK_VERDICT = {
+  qualified: { label: '合格', type: 'success' },
+  unqualified: { label: '不合格', type: 'danger' },
+}
+
 // 追踪时间线的节点名称。
 export const TIMELINE_STAGE = {
   reported: { label: '故障登记', type: 'primary' },
   repair_started: { label: '维修开工', type: 'warning' },
   repair_finished: { label: '维修完成', type: 'success' },
+  callback_qualified: { label: '质量回访', type: 'success' },
+  callback_unqualified: { label: '回访不合格', type: 'danger' },
   closed: { label: '故障关闭', type: 'info' },
 }
 

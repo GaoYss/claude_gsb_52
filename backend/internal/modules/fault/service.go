@@ -31,15 +31,27 @@ type LampPort interface {
 	UpdateRunStatus(ctx context.Context, id uint, status string) error
 }
 
+// CallbackGuard 由质量回访模块实现, 故障结算关闭前校验回访是否完成。
+// 该依赖通过 SetCallbackGuard 回填, 避免构造期循环依赖。
+type CallbackGuard interface {
+	HasUnfinished(ctx context.Context, faultID uint) (bool, error)
+}
+
 // Service 承载故障登记的业务规则, 并向维修模块提供故障状态流转能力。
 type Service struct {
-	repo  *Repository
-	lamps LampPort
+	repo      *Repository
+	lamps     LampPort
+	callbacks CallbackGuard
 }
 
 // NewService 构造故障登记服务。
 func NewService(repo *Repository, lamps LampPort) *Service {
 	return &Service{repo: repo, lamps: lamps}
+}
+
+// SetCallbackGuard 回填质量回访守卫, 用于结算关闭前的回访完成校验。
+func (s *Service) SetCallbackGuard(callbacks CallbackGuard) {
+	s.callbacks = callbacks
 }
 
 // Repository 暴露仓储, 供 bootstrap 装配其它模块所需的端口。
@@ -187,7 +199,8 @@ func (s *Service) Update(ctx context.Context, id uint, req UpdateRequest) (*Faul
 	return entity, nil
 }
 
-// Close 关闭故障, 用于确认闭环或作废处理。
+// Close 关闭故障(结算闭环), 用于确认闭环或作废处理。
+// 存在未完成的回访任务时不允许结算关闭。
 func (s *Service) Close(ctx context.Context, id uint, req CloseRequest) (*Fault, error) {
 	entity, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -198,6 +211,16 @@ func (s *Service) Close(ctx context.Context, id uint, req CloseRequest) (*Fault,
 	}
 	if !canTransitTo(entity.Status, StatusClosed) {
 		return nil, apperr.Conflict("故障 %s 当前状态为 %s, 不允许关闭", entity.FaultNo, StatusLabel(entity.Status))
+	}
+
+	if s.callbacks != nil {
+		unfinished, err := s.callbacks.HasUnfinished(ctx, entity.ID)
+		if err != nil {
+			return nil, err
+		}
+		if unfinished {
+			return nil, apperr.Conflict("故障 %s 存在未完成的回访任务, 回访未完成不允许结算关闭", entity.FaultNo)
+		}
 	}
 
 	now := time.Now()
