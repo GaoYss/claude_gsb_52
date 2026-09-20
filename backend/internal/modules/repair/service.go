@@ -35,17 +35,30 @@ type FaultPort interface {
 
 // Service 承载维修记录录入的业务规则。
 type Service struct {
-	repo   *Repository
-	faults FaultPort
+	repo     *Repository
+	faults   FaultPort
+	callback CallbackHook
 }
 
 // NewService 构造维修记录服务。
 func NewService(repo *Repository, faults FaultPort) *Service {
-	return &Service{repo: repo, faults: faults}
+	return &Service{repo: repo, faults: faults, callback: noopCallbackHook{}}
+}
+
+// SetCallbackHook 装配回访模块提供的完工/删除钩子, 由 bootstrap 在构造完成后回填。
+func (s *Service) SetCallbackHook(hook CallbackHook) {
+	if hook != nil {
+		s.callback = hook
+	}
 }
 
 // Get 查询维修记录详情。
 func (s *Service) Get(ctx context.Context, id uint) (*Repair, error) {
+	return s.repo.GetByID(ctx, id)
+}
+
+// GetByID 查询维修记录详情, 满足回访模块 RepairPort 端口定义。
+func (s *Service) GetByID(ctx context.Context, id uint) (*Repair, error) {
 	return s.repo.GetByID(ctx, id)
 }
 
@@ -232,6 +245,87 @@ func (s *Service) Finish(ctx context.Context, id uint, req FinishRequest) (*Repa
 	}
 
 	entity.FillDuration()
+
+	// 完工后分发事件: 回访模块据此按规则生成回访任务(失败仅记录, 不影响完工结果)。
+	s.callback.OnRepairFinished(ctx, FinishEvent{
+		RepairID:   entity.ID,
+		RepairNo:   entity.RepairNo,
+		FaultID:    entity.FaultID,
+		FaultNo:    entity.FaultNo,
+		LampID:     entity.LampID,
+		LampCode:   entity.LampCode,
+		Result:     entity.Result,
+		Fixed:      result == ResultFixed,
+		StartedAt:  entity.StartedAt,
+		FinishedAt: *entity.FinishedAt,
+	})
+	return entity, nil
+}
+
+// CreateRework 由回访不合格触发: 在原故障上创建一条返修维修记录并重新开工, 关联被返修的原维修记录。
+// 原维修记录(含其完工时间与首次处置内容)保持不变; 返修记录独立生成新单号。
+func (s *Service) CreateRework(ctx context.Context, req ReworkRequest) (*Repair, error) {
+	target, err := s.faults.GetByID(ctx, req.FaultID)
+	if err != nil {
+		return nil, err
+	}
+	if target.Status == fault.StatusClosed {
+		return nil, apperr.Conflict("故障 %s 已关闭, 不允许登记返修", target.FaultNo)
+	}
+
+	origin, err := s.repo.GetByID(ctx, req.OriginRepairID)
+	if err != nil {
+		return nil, err
+	}
+	if origin.FaultID != target.ID {
+		return nil, apperr.BadRequest("原维修记录 %s 不属于故障 %s", origin.RepairNo, target.FaultNo)
+	}
+
+	ongoing, err := s.repo.GetOngoingByFault(ctx, target.ID)
+	if err != nil {
+		return nil, err
+	}
+	if ongoing != nil {
+		return nil, apperr.Conflict("故障 %s 已有进行中的维修记录 %s, 无法再触发返修", target.FaultNo, ongoing.RepairNo)
+	}
+
+	repairman := strings.TrimSpace(req.Repairman)
+	if repairman == "" {
+		return nil, apperr.BadRequest("返修维修人员不能为空")
+	}
+
+	startedAt := time.Now()
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		content = "回访不合格返修"
+	}
+
+	entity := &Repair{
+		FaultID:        target.ID,
+		FaultNo:        target.FaultNo,
+		LampID:         target.LampID,
+		LampCode:       target.LampCode,
+		Repairman:      repairman,
+		RepairTeam:     strings.TrimSpace(req.RepairTeam),
+		StartedAt:      startedAt,
+		Status:         StatusOngoing,
+		Content:        content,
+		Cost:           valueOrZero(req.Cost),
+		IsRework:       true,
+		OriginRepairID: &origin.ID,
+		OriginRepairNo: origin.RepairNo,
+	}
+
+	if err := s.repo.CreateWithUniqueNo(ctx, entity, "WX"+startedAt.Format("20060102")); err != nil {
+		return nil, err
+	}
+
+	// 返修开工: 已修复 -> 维修中 回退, 维修次数累加; 原完工记录不被改动。
+	if err := s.faults.OnRepairStarted(ctx, target.ID, entity.ID); err != nil {
+		return nil, err
+	}
+
+	entity.FillDuration()
 	return entity, nil
 }
 
@@ -247,6 +341,9 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 	}
 	if target.Status == fault.StatusClosed {
 		return apperr.Conflict("故障 %s 已关闭, 不允许删除其维修记录", target.FaultNo)
+	}
+	if err := s.callback.AssertRepairDeletable(ctx, entity.ID); err != nil {
+		return err
 	}
 
 	if err := s.repo.Delete(ctx, id); err != nil {
@@ -332,6 +429,7 @@ func buildFilter(query ListQuery) (Filter, error) {
 		RepairTeam: strings.TrimSpace(query.RepairTeam),
 		Status:     strings.TrimSpace(query.Status),
 		Result:     strings.TrimSpace(query.Result),
+		IsRework:   parseBoolFilter(query.IsRework),
 	}
 	if filter.Status != "" && filter.Status != StatusOngoing && filter.Status != StatusFinished {
 		return filter, apperr.BadRequest("非法的维修状态: %s", filter.Status)
@@ -389,4 +487,18 @@ func valueOrZero(value *float64) float64 {
 		return 0
 	}
 	return *value
+}
+
+// parseBoolFilter 解析可选的布尔查询参数, 空串返回 nil 表示不过滤。
+func parseBoolFilter(value string) *bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes":
+		truth := true
+		return &truth
+	case "false", "0", "no":
+		falsity := false
+		return &falsity
+	default:
+		return nil
+	}
 }

@@ -3,6 +3,7 @@ package status
 import (
 	"time"
 
+	"streetlight/internal/modules/callback"
 	"streetlight/internal/modules/fault"
 	"streetlight/internal/modules/lamp"
 	"streetlight/internal/modules/repair"
@@ -49,22 +50,35 @@ type RepairSummary struct {
 	OngoingTotal      int64   `json:"ongoing_total"`
 	FinishedTotal     int64   `json:"finished_total"`
 	TodayFinished     int64   `json:"today_finished"`
+	ReworkTotal       int64   `json:"rework_total"` // 返修次数(回访不合格触发)
 	AverageDurationHr float64 `json:"average_duration_hours"`
 	TotalCost         float64 `json:"total_cost"`
 }
 
+// CallbackSummary 维修质量回访概览。
+type CallbackSummary struct {
+	Total            int64 `json:"total"`
+	PendingTotal     int64 `json:"pending_total"`
+	ContactedTotal   int64 `json:"contacted_total"`
+	QualifiedTotal   int64 `json:"qualified_total"`
+	UnqualifiedTotal int64 `json:"unqualified_total"`
+	OverdueTotal     int64 `json:"overdue_total"`
+	ReworkTotal      int64 `json:"rework_total"` // 返修次数, 与维修概览保持一致
+}
+
 // Overview 维修状态总览看板。
 type Overview struct {
-	Lamp          LampSummary  `json:"lamp"`
-	Fault         FaultSummary `json:"fault"`
-	Repair        RepairSummary `json:"repair"`
-	FaultByType   []LabelCount  `json:"fault_by_type"`
-	FaultByLevel  []LabelCount  `json:"fault_by_level"`
-	TopRoads      []LabelCount  `json:"top_roads"`
-	RecentFaults  []FaultBrief  `json:"recent_faults"`
-	OverdueFaults []FaultBrief  `json:"overdue_faults"`
-	OverdueHours  float64       `json:"overdue_threshold_hours"`
-	GeneratedAt   time.Time     `json:"generated_at"`
+	Lamp          LampSummary     `json:"lamp"`
+	Fault         FaultSummary    `json:"fault"`
+	Repair        RepairSummary   `json:"repair"`
+	Callback      CallbackSummary `json:"callback"`
+	FaultByType   []LabelCount    `json:"fault_by_type"`
+	FaultByLevel  []LabelCount    `json:"fault_by_level"`
+	TopRoads      []LabelCount    `json:"top_roads"`
+	RecentFaults  []FaultBrief    `json:"recent_faults"`
+	OverdueFaults []FaultBrief    `json:"overdue_faults"`
+	OverdueHours  float64         `json:"overdue_threshold_hours"`
+	GeneratedAt   time.Time       `json:"generated_at"`
 }
 
 // LampStatusRow 是"维修状态查询"列表中的一行: 一盏路灯的当前维修进展。
@@ -101,10 +115,11 @@ type TimelineEvent struct {
 
 // TrackResult 是单条故障(或单盏路灯)的完整处理链路。
 type TrackResult struct {
-	SearchType    string            `json:"search_type"`
-	Lamp          *lamp.Lamp        `json:"lamp,omitempty"`
-	Fault         *fault.Fault      `json:"fault,omitempty"`
-	Repairs       []repair.Repair   `json:"repairs"`
-	Timeline      []TimelineEvent   `json:"timeline"`
-	RelatedFaults []FaultBrief      `json:"related_faults,omitempty"`
+	SearchType    string          `json:"search_type"`
+	Lamp          *lamp.Lamp      `json:"lamp,omitempty"`
+	Fault         *fault.Fault    `json:"fault,omitempty"`
+	Repairs       []repair.Repair `json:"repairs"`
+	Callbacks     []callback.Task `json:"callbacks"`
+	Timeline      []TimelineEvent `json:"timeline"`
+	RelatedFaults []FaultBrief    `json:"related_faults,omitempty"`
 }

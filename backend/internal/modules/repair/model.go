@@ -56,6 +56,12 @@ type Repair struct {
 	Cost         float64    `json:"cost"`
 	Remark       string     `gorm:"size:255" json:"remark"`
 
+	// 返修关联: 回访不合格触发的返修单 IsRework=true, 并指向被返修的原维修记录。
+	// 原维修记录保持不变, 其完工时间与首次处置过程不会因返修被改写。
+	IsRework       bool   `gorm:"not null;default:false;index" json:"is_rework"`
+	OriginRepairID *uint  `gorm:"index" json:"origin_repair_id"`
+	OriginRepairNo string `gorm:"size:64" json:"origin_repair_no"`
+
 	// DurationMinutes 仅用于响应展示的维修耗时(分钟), 不落库。
 	DurationMinutes *int64 `gorm:"-" json:"duration_minutes,omitempty"`
 

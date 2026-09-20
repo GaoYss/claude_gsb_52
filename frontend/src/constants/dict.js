@@ -44,11 +44,54 @@ export const REPAIR_RESULT = {
   unfixable: { label: '无法修复', type: 'danger' },
 }
 
+// 回访任务状态。
+export const CALLBACK_STATUS = {
+  pending: { label: '待回访', type: 'danger' },
+  contacted: { label: '已联系待判定', type: 'warning' },
+  qualified: { label: '回访合格', type: 'success' },
+  unqualified: { label: '回访不合格', type: 'danger' },
+}
+
+// 回访联系结果。
+export const CONTACT_RESULT = {
+  connected: { label: '已联系', type: 'success' },
+  no_answer: { label: '未接通', type: 'info' },
+  postponed: { label: '受访人要求延期', type: 'warning' },
+  invalid: { label: '无法联系', type: 'danger' },
+}
+
+// 回访联系渠道。
+export const CONTACT_CHANNEL = {
+  phone: { label: '电话回访', type: 'primary' },
+  onsite: { label: '现场回访', type: 'success' },
+}
+
+// 满意度 1-5。
+export const SATISFACTION = [
+  { value: 5, label: '非常满意', type: 'success' },
+  { value: 4, label: '满意', type: 'success' },
+  { value: 3, label: '一般', type: 'info' },
+  { value: 2, label: '不满意', type: 'warning' },
+  { value: 1, label: '非常不满意', type: 'danger' },
+]
+
+// 满意度取值 -> 文案/标签类型。
+export const SATISFACTION_MAP = SATISFACTION.reduce((acc, item) => {
+  acc[item.value] = item
+  return acc
+}, {})
+
 // 追踪时间线的节点名称。
 export const TIMELINE_STAGE = {
   reported: { label: '故障登记', type: 'primary' },
   repair_started: { label: '维修开工', type: 'warning' },
   repair_finished: { label: '维修完成', type: 'success' },
+  rework_started: { label: '返修开工', type: 'warning' },
+  rework_finished: { label: '返修完成', type: 'warning' },
+  callback_created: { label: '生成回访任务', type: 'primary' },
+  callback_contact: { label: '回访联系', type: 'primary' },
+  callback_qualified: { label: '回访合格', type: 'success' },
+  callback_unqualified: { label: '回访不合格, 触发返修', type: 'danger' },
   closed: { label: '故障关闭', type: 'info' },
 }
 

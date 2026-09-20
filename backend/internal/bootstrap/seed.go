@@ -146,6 +146,10 @@ func seed(db *gorm.DB) error {
 		return err
 	}
 
+	if err := seedCallbacks(db, now, cases, faults, repairs, repairRanges); err != nil {
+		return err
+	}
+
 	slog.Info("演示数据初始化完成",
 		"路灯", len(lamps),
 		"故障", len(faults),

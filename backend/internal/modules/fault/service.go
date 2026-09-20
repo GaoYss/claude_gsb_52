@@ -33,13 +33,21 @@ type LampPort interface {
 
 // Service 承载故障登记的业务规则, 并向维修模块提供故障状态流转能力。
 type Service struct {
-	repo  *Repository
-	lamps LampPort
+	repo   *Repository
+	lamps  LampPort
+	settle SettlementGuard
 }
 
 // NewService 构造故障登记服务。
 func NewService(repo *Repository, lamps LampPort) *Service {
-	return &Service{repo: repo, lamps: lamps}
+	return &Service{repo: repo, lamps: lamps, settle: noopSettlementGuard{}}
+}
+
+// SetSettlementGuard 装配回访模块提供的结算守卫, 由 bootstrap 在构造完成后回填。
+func (s *Service) SetSettlementGuard(guard SettlementGuard) {
+	if guard != nil {
+		s.settle = guard
+	}
 }
 
 // Repository 暴露仓储, 供 bootstrap 装配其它模块所需的端口。
@@ -198,6 +206,11 @@ func (s *Service) Close(ctx context.Context, id uint, req CloseRequest) (*Fault,
 	}
 	if !canTransitTo(entity.Status, StatusClosed) {
 		return nil, apperr.Conflict("故障 %s 当前状态为 %s, 不允许关闭", entity.FaultNo, StatusLabel(entity.Status))
+	}
+
+	// 结算前置条件: 回访未完成(未回访合格)的故障不允许关闭结算。
+	if err := s.settle.AssertSettlementAllowed(ctx, entity.ID); err != nil {
+		return nil, err
 	}
 
 	now := time.Now()

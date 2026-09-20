@@ -14,6 +14,10 @@
         <el-select v-model="query.result" placeholder="维修结果" clearable @change="handleSearch">
           <el-option v-for="(item, key) in REPAIR_RESULT" :key="key" :label="item.label" :value="key" />
         </el-select>
+        <el-select v-model="query.is_rework" placeholder="是否返修" clearable @change="handleSearch">
+          <el-option label="返修单" value="true" />
+          <el-option label="首次维修" value="false" />
+        </el-select>
         <el-select v-model="query.repairman" placeholder="维修人员" clearable @change="handleSearch">
           <el-option v-for="item in dictStore.repairMeta.repairmen" :key="item" :label="item" :value="item" />
         </el-select>
@@ -33,7 +37,12 @@
 
     <el-card shadow="never">
       <el-table v-loading="loading" :data="rows" stripe>
-        <el-table-column prop="repair_no" label="维修单号" width="140" fixed="left" />
+        <el-table-column label="维修单号" width="150" fixed="left">
+          <template #default="{ row }">
+            <div>{{ row.repair_no }}</div>
+            <el-tag v-if="row.is_rework" type="warning" size="small" effect="plain" class="rework-tag">返修</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="fault_no" label="故障单号" width="140" />
         <el-table-column prop="lamp_code" label="路灯编号" width="110" />
         <el-table-column prop="repairman" label="维修人员" width="100" />
@@ -59,7 +68,14 @@
         <el-table-column label="费用" width="100">
           <template #default="{ row }">{{ formatMoney(row.cost) }}</template>
         </el-table-column>
-        <el-table-column prop="content" label="维修内容" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="content" label="维修内容" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div>{{ row.content }}</div>
+            <div v-if="row.is_rework && row.origin_repair_no" class="text-muted rework-origin">
+              关联原维修: {{ row.origin_repair_no }}
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">故障详情</el-button>
@@ -109,6 +125,7 @@ const { loading, rows, total, query, load, search, reset, changePage, changePage
   keyword: '',
   status: '',
   result: '',
+  is_rework: '',
   repairman: '',
   start_date: '',
   end_date: '',
@@ -196,3 +213,13 @@ onMounted(async () => {
   await applyRouteQuery()
 })
 </script>
+
+<style scoped>
+.rework-tag {
+  margin-top: 2px;
+}
+
+.rework-origin {
+  font-size: 12px;
+}
+</style>

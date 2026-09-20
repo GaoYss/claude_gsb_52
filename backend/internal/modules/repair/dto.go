@@ -37,6 +37,16 @@ type FinishRequest struct {
 	Remark     string   `json:"remark" binding:"omitempty,max=255"`
 }
 
+// ReworkRequest 回访不合格触发返修的派工请求, 由回访模块调用, 关联原维修记录。
+type ReworkRequest struct {
+	FaultID        uint
+	OriginRepairID uint
+	Repairman      string
+	RepairTeam     string
+	Content        string
+	Cost           *float64
+}
+
 // ListQuery 维修记录查询条件。
 type ListQuery struct {
 	pagination.Params
@@ -47,6 +57,7 @@ type ListQuery struct {
 	RepairTeam string `form:"repair_team"`
 	Status     string `form:"status"`
 	Result     string `form:"result"`
+	IsRework   string `form:"is_rework"` // true/false, 空表示不过滤
 	StartDate  string `form:"start_date"`
 	EndDate    string `form:"end_date"`
 }

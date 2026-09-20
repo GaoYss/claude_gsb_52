@@ -2,6 +2,7 @@ package status
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"streetlight/internal/apperr"
+	"streetlight/internal/modules/callback"
 	"streetlight/internal/modules/fault"
 	"streetlight/internal/modules/lamp"
 	"streetlight/internal/modules/repair"
@@ -49,17 +51,18 @@ type TrackQuery struct {
 }
 
 // Service 提供跨模块的维修状态查询能力(只读)。
-// 作为读模型, 它直接基于 lamp / fault / repair 三张表组装视图, 避免不必要的多次往返查询。
+// 作为读模型, 它直接基于 lamp / fault / repair / callback 表组装视图, 避免不必要的多次往返查询。
 type Service struct {
-	db      *gorm.DB
-	lamps   *lamp.Repository
-	faults  *fault.Repository
-	repairs *repair.Repository
+	db        *gorm.DB
+	lamps     *lamp.Repository
+	faults    *fault.Repository
+	repairs   *repair.Repository
+	callbacks *callback.Repository
 }
 
 // NewService 构造维修状态查询服务。
-func NewService(db *gorm.DB, lamps *lamp.Repository, faults *fault.Repository, repairs *repair.Repository) *Service {
-	return &Service{db: db, lamps: lamps, faults: faults, repairs: repairs}
+func NewService(db *gorm.DB, lamps *lamp.Repository, faults *fault.Repository, repairs *repair.Repository, callbacks *callback.Repository) *Service {
+	return &Service{db: db, lamps: lamps, faults: faults, repairs: repairs, callbacks: callbacks}
 }
 
 // Overview 汇总维修状态看板数据。
@@ -135,6 +138,23 @@ func (s *Service) Overview(ctx context.Context) (*Overview, error) {
 	if err != nil {
 		return nil, err
 	}
+	reworkTotal, err := s.repairs.CountRework(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	callbackTotal, err := s.callbacks.Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+	callbackByStatus, err := s.callbacks.CountByColumn(ctx, "status")
+	if err != nil {
+		return nil, err
+	}
+	callbackOverdue, err := s.callbacks.CountOverdue(ctx, now)
+	if err != nil {
+		return nil, err
+	}
 
 	recentFaults, err := s.faults.ListRecent(ctx, 8)
 	if err != nil {
@@ -163,8 +183,18 @@ func (s *Service) Overview(ctx context.Context) (*Overview, error) {
 			OngoingTotal:      repairByStatus[repair.StatusOngoing],
 			FinishedTotal:     repairByStatus[repair.StatusFinished],
 			TodayFinished:     todayFinished,
+			ReworkTotal:       reworkTotal,
 			AverageDurationHr: round2(averageDuration),
 			TotalCost:         round2(totalCost),
+		},
+		Callback: CallbackSummary{
+			Total:            callbackTotal,
+			PendingTotal:     callbackByStatus[callback.StatusPending],
+			ContactedTotal:   callbackByStatus[callback.StatusContacted],
+			QualifiedTotal:   callbackByStatus[callback.StatusQualified],
+			UnqualifiedTotal: callbackByStatus[callback.StatusUnqualified],
+			OverdueTotal:     callbackOverdue,
+			ReworkTotal:      reworkTotal,
 		},
 		FaultByType:   topCounts(faultByType, 0),
 		FaultByLevel:  orderedCounts(faultByLevel, fault.Levels()),
@@ -307,6 +337,7 @@ func (s *Service) Track(ctx context.Context, query TrackQuery) (*TrackResult, er
 			SearchType:    "lamp",
 			Lamp:          device,
 			Repairs:       make([]repair.Repair, 0),
+			Callbacks:     make([]callback.Task, 0),
 			Timeline:      make([]TimelineEvent, 0),
 			RelatedFaults: toBriefs(history),
 		}
@@ -316,9 +347,14 @@ func (s *Service) Track(ctx context.Context, query TrackQuery) (*TrackResult, er
 			if err != nil {
 				return nil, err
 			}
+			tasks, contacts, err := s.callbackChain(ctx, latest.ID)
+			if err != nil {
+				return nil, err
+			}
 			result.Fault = &latest
 			result.Repairs = repairs
-			result.Timeline = buildTimeline(&latest, repairs)
+			result.Callbacks = tasks
+			result.Timeline = buildTimeline(&latest, repairs, tasks, contacts)
 		}
 		return result, nil
 
@@ -337,13 +373,31 @@ func (s *Service) buildFaultTrack(ctx context.Context, entity *fault.Fault) (*Tr
 	if err != nil {
 		return nil, err
 	}
+	tasks, contacts, err := s.callbackChain(ctx, entity.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &TrackResult{
 		SearchType: "fault",
 		Lamp:       device,
 		Fault:      entity,
 		Repairs:    repairs,
-		Timeline:   buildTimeline(entity, repairs),
+		Callbacks:  tasks,
+		Timeline:   buildTimeline(entity, repairs, tasks, contacts),
 	}, nil
+}
+
+// callbackChain 取出某故障的回访任务与联系记录, 供追踪时间线组装。
+func (s *Service) callbackChain(ctx context.Context, faultID uint) ([]callback.Task, []callback.Contact, error) {
+	tasks, err := s.callbacks.ListByFault(ctx, faultID)
+	if err != nil {
+		return nil, nil, err
+	}
+	contactsMap, err := s.callbacks.ListContactsByFaults(ctx, []uint{faultID})
+	if err != nil {
+		return nil, nil, err
+	}
+	return tasks, contactsMap[faultID], nil
 }
 
 // countFaultsByLamp 批量统计每盏路灯的故障数量, openOnly 为 true 时仅统计未闭环故障。
@@ -411,9 +465,10 @@ func (s *Service) latestRepairs(ctx context.Context, lampIDs []uint) (map[uint]r
 	return result, nil
 }
 
-// buildTimeline 依据故障与维修记录构建处置时间线。
-func buildTimeline(entity *fault.Fault, repairs []repair.Repair) []TimelineEvent {
-	events := make([]TimelineEvent, 0, len(repairs)*2+2)
+// buildTimeline 依据故障、维修与回访记录构建处置时间线。
+// 返修与首次处置分别呈现, 回访合格/不合格独立成节点, 不改变原完工时间。
+func buildTimeline(entity *fault.Fault, repairs []repair.Repair, tasks []callback.Task, contacts []callback.Contact) []TimelineEvent {
+	events := make([]TimelineEvent, 0, len(repairs)*2+len(tasks)*2+2)
 
 	events = append(events, TimelineEvent{
 		Stage:     "reported",
@@ -424,15 +479,24 @@ func buildTimeline(entity *fault.Fault, repairs []repair.Repair) []TimelineEvent
 	})
 
 	for _, item := range repairs {
+		startLabel := "维修开工"
+		finishLabel := "维修完成"
+		if item.IsRework {
+			startLabel = "返修开工"
+			finishLabel = "返修完成"
+		}
 		events = append(events, TimelineEvent{
-			Stage:     "repair_started",
-			Label:     "维修开工",
+			Stage:     stageRepairStarted(item.IsRework),
+			Label:     startLabel,
 			Operator:  item.Repairman,
 			Detail:    strings.TrimSpace(item.RepairNo + " " + item.Content),
 			Timestamp: item.StartedAt,
 		})
 		if item.FinishedAt != nil {
 			detail := item.RepairNo
+			if item.IsRework && item.OriginRepairNo != "" {
+				detail = strings.TrimSpace(detail + " 关联原维修: " + item.OriginRepairNo)
+			}
 			if item.Result != "" {
 				detail = strings.TrimSpace(detail + " 结果: " + repair.ResultLabel(item.Result))
 			}
@@ -440,11 +504,33 @@ func buildTimeline(entity *fault.Fault, repairs []repair.Repair) []TimelineEvent
 				detail = strings.TrimSpace(detail + " 耗材: " + item.Materials)
 			}
 			events = append(events, TimelineEvent{
-				Stage:     "repair_finished",
-				Label:     "维修完成",
+				Stage:     stageRepairFinished(item.IsRework),
+				Label:     finishLabel,
 				Operator:  item.Repairman,
 				Detail:    detail,
 				Timestamp: *item.FinishedAt,
+			})
+		}
+	}
+
+	contactsByTask := make(map[uint][]callback.Contact, len(tasks))
+	for _, contact := range contacts {
+		contactsByTask[contact.TaskID] = append(contactsByTask[contact.TaskID], contact)
+	}
+	for _, task := range tasks {
+		events = append(events, TimelineEvent{
+			Stage:     "callback_created",
+			Label:     fmt.Sprintf("生成回访任务(第%d轮)", task.Round),
+			Detail:    strings.TrimSpace(task.TaskNo + " 关联维修: " + task.RepairNo),
+			Timestamp: task.CreatedAt,
+		})
+		for _, contact := range contactsByTask[task.ID] {
+			events = append(events, TimelineEvent{
+				Stage:     callbackStage(contact),
+				Label:     callbackEventLabel(contact),
+				Operator:  contact.ContactPerson,
+				Detail:    callbackEventDetail(contact),
+				Timestamp: contact.ContactedAt,
 			})
 		}
 	}
@@ -462,6 +548,58 @@ func buildTimeline(entity *fault.Fault, repairs []repair.Repair) []TimelineEvent
 		return events[i].Timestamp.Before(events[j].Timestamp)
 	})
 	return events
+}
+
+// stageRepairStarted 返回开工节点类型, 返修使用独立取值便于前端区分颜色。
+func stageRepairStarted(isRework bool) string {
+	if isRework {
+		return "rework_started"
+	}
+	return "repair_started"
+}
+
+func stageRepairFinished(isRework bool) string {
+	if isRework {
+		return "rework_finished"
+	}
+	return "repair_finished"
+}
+
+// callbackStage 根据联系/判定结论返回时间线节点类型。
+func callbackStage(contact callback.Contact) string {
+	switch {
+	case contact.Qualified == nil:
+		return "callback_contact"
+	case *contact.Qualified:
+		return "callback_qualified"
+	default:
+		return "callback_unqualified"
+	}
+}
+
+func callbackEventLabel(contact callback.Contact) string {
+	switch {
+	case contact.Qualified != nil && *contact.Qualified:
+		return "回访合格"
+	case contact.Qualified != nil && !*contact.Qualified:
+		return "回访不合格, 触发返修"
+	default:
+		return "回访联系: " + callback.ContactResultLabel(contact.Result)
+	}
+}
+
+func callbackEventDetail(contact callback.Contact) string {
+	parts := make([]string, 0, 3)
+	if contact.ContactName != "" {
+		parts = append(parts, "受访人: "+contact.ContactName)
+	}
+	if contact.Satisfaction != nil {
+		parts = append(parts, fmt.Sprintf("满意度: %d/5", *contact.Satisfaction))
+	}
+	if contact.Content != "" {
+		parts = append(parts, contact.Content)
+	}
+	return strings.Join(parts, " ")
 }
 
 // orderedCounts 按给定顺序输出分组统计, 保证前端展示顺序稳定且包含零值项。

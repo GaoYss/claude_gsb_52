@@ -79,7 +79,12 @@
       <el-card shadow="never">
         <div class="section-title">维修记录明细</div>
         <el-table :data="result.repairs" size="small" border>
-          <el-table-column prop="repair_no" label="维修单号" width="150" />
+          <el-table-column label="维修单号" width="150">
+            <template #default="{ row }">
+              <div>{{ row.repair_no }}</div>
+              <el-tag v-if="row.is_rework" type="warning" size="small" effect="plain">返修</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="repairman" label="维修人员" width="110" />
           <el-table-column prop="repair_team" label="班组" width="140" />
           <el-table-column label="状态" width="100">
@@ -87,6 +92,9 @@
           </el-table-column>
           <el-table-column label="结果" width="100">
             <template #default="{ row }">{{ dictLabel(REPAIR_RESULT, row.result) }}</template>
+          </el-table-column>
+          <el-table-column label="关联原维修" width="150">
+            <template #default="{ row }">{{ row.origin_repair_no || '-' }}</template>
           </el-table-column>
           <el-table-column label="开工" width="150">
             <template #default="{ row }">{{ formatDateTime(row.started_at) }}</template>
@@ -102,6 +110,34 @@
             <template #default="{ row }">{{ formatMoney(row.cost) }}</template>
           </el-table-column>
         </el-table>
+      </el-card>
+
+      <el-card v-if="result.callbacks?.length" shadow="never">
+        <div class="section-title">质量回访记录</div>
+        <el-timeline>
+          <el-timeline-item
+            v-for="task in result.callbacks"
+            :key="task.id"
+            :timestamp="`第 ${task.round} 轮 · 时限 ${formatDateTime(task.due_at)}`"
+            placement="top"
+          >
+            <el-card shadow="never" size="small">
+              <div class="callback-task-head">
+                <span class="callback-task-no">{{ task.task_no }}</span>
+                <StatusTag :dict="CALLBACK_STATUS" :value="task.status" />
+                <el-rate v-if="task.satisfaction" :model-value="task.satisfaction" disabled size="small" />
+                <el-tag v-if="task.rework_repair_no" type="warning" size="small" effect="plain">
+                  已触发返修 {{ task.rework_repair_no }}
+                </el-tag>
+              </div>
+              <div class="text-muted callback-task-detail">
+                关联维修 {{ task.repair_no }}
+                <span v-if="task.contacted_at"> · 末次联系 {{ formatDateTime(task.contacted_at) }}</span>
+              </div>
+              <div v-if="task.result_remark" class="callback-task-remark">{{ task.result_remark }}</div>
+            </el-card>
+          </el-timeline-item>
+        </el-timeline>
       </el-card>
 
       <el-card v-if="result.related_faults?.length" shadow="never">
@@ -138,6 +174,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { statusApi } from '@/api/status'
 import {
+  CALLBACK_STATUS,
   FAULT_LEVEL,
   FAULT_SOURCE,
   FAULT_STATUS,
@@ -215,5 +252,26 @@ onMounted(() => {
 <style scoped>
 .timeline-title {
   font-weight: 600;
+}
+
+.callback-task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.callback-task-no {
+  font-weight: 600;
+}
+
+.callback-task-detail {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.callback-task-remark {
+  font-size: 13px;
+  margin-top: 4px;
 }
 </style>

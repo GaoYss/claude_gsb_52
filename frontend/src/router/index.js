@@ -32,6 +32,12 @@ const routes = [
         meta: { title: '维修记录录入', icon: 'Tools' },
       },
       {
+        path: 'callbacks',
+        name: 'callbacks',
+        component: () => import('@/views/callback/CallbackListView.vue'),
+        meta: { title: '维修质量回访', icon: 'Phone' },
+      },
+      {
         path: 'status',
         name: 'status',
         component: () => import('@/views/status/StatusLampView.vue'),

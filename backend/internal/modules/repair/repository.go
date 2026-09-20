@@ -23,6 +23,7 @@ type Filter struct {
 	RepairTeam  string
 	Status      string
 	Result      string
+	IsRework    *bool
 	StartedFrom *time.Time
 	StartedTo   *time.Time
 }
@@ -225,6 +226,15 @@ func (r *Repository) Count(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+// CountRework 统计返修维修记录数量(回访不合格触发的返修次数)。
+func (r *Repository) CountRework(ctx context.Context) (int64, error) {
+	var total int64
+	if err := r.session(ctx).Model(&Repair{}).Where("is_rework = ?", true).Count(&total).Error; err != nil {
+		return 0, fmt.Errorf("统计返修次数失败: %w", err)
+	}
+	return total, nil
+}
+
 // CountFinishedBetween 统计完工时间落在区间内的维修记录数量。
 func (r *Repository) CountFinishedBetween(ctx context.Context, from, to time.Time) (int64, error) {
 	var total int64
@@ -282,7 +292,7 @@ func (r *Repository) AverageDurationHours(ctx context.Context) (float64, error) 
 func (r *Repository) DistinctValues(ctx context.Context, column string) ([]string, error) {
 	values := make([]string, 0)
 	err := r.session(ctx).Model(&Repair{}).
-		Where(column + " <> ''").
+		Where(column+" <> ''").
 		Distinct().
 		Order(column).
 		Pluck(column, &values).Error
@@ -318,6 +328,9 @@ func applyFilter(statement *gorm.DB, filter Filter) *gorm.DB {
 	}
 	if filter.Result != "" {
 		statement = statement.Where("result = ?", filter.Result)
+	}
+	if filter.IsRework != nil {
+		statement = statement.Where("is_rework = ?", *filter.IsRework)
 	}
 	if filter.StartedFrom != nil {
 		statement = statement.Where("started_at >= ?", *filter.StartedFrom)

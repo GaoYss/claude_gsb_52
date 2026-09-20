@@ -54,6 +54,22 @@
         color="#409eff"
         :hint="`故障累计 ${overview.fault.total} 条`"
       />
+      <StatCard
+        label="返修次数"
+        :value="overview.repair.rework_total"
+        suffix="次"
+        icon="RefreshRight"
+        color="#909399"
+        hint="回访不合格触发的返修"
+      />
+      <StatCard
+        label="回访待办"
+        :value="callbackOpen"
+        suffix="条"
+        icon="Phone"
+        color="#e6a23c"
+        :hint="`超期 ${overview.callback.overdue_total} 条 / 已合格 ${overview.callback.qualified_total} 条`"
+      />
     </div>
 
     <el-row :gutter="16">
@@ -119,10 +135,23 @@
       </el-col>
     </el-row>
 
-    <el-card shadow="never">
-      <div class="section-title">故障高发道路 TOP5</div>
-      <BarList :items="overview.top_roads" />
-    </el-card>
+    <el-row :gutter="16">
+      <el-col :xs="24" :md="12">
+        <el-card shadow="never">
+          <div class="section-title">
+            <span>回访任务状态</span>
+            <el-button link type="primary" @click="$router.push('/callbacks')">回访管理</el-button>
+          </div>
+          <BarList :items="callbackStatusItems" />
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :md="12">
+        <el-card shadow="never">
+          <div class="section-title">故障高发道路 TOP5</div>
+          <BarList :items="overview.top_roads" />
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
@@ -135,7 +164,7 @@ import StatCard from '@/components/common/StatCard.vue'
 import BarList from '@/components/common/BarList.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { statusApi } from '@/api/status'
-import { FAULT_LEVEL, FAULT_STATUS, RUN_STATUS } from '@/constants/dict'
+import { CALLBACK_STATUS, FAULT_LEVEL, FAULT_STATUS, RUN_STATUS } from '@/constants/dict'
 import { formatWaiting } from '@/utils/format'
 
 const router = useRouter()
@@ -144,7 +173,8 @@ const loading = ref(false)
 const emptyOverview = () => ({
   lamp: { total: 0, road_count: 0, by_run_status: {} },
   fault: { total: 0, open_total: 0, by_status: {}, today_reported: 0, overdue_total: 0 },
-  repair: { total: 0, ongoing_total: 0, finished_total: 0, today_finished: 0, average_duration_hours: 0, total_cost: 0 },
+  repair: { total: 0, ongoing_total: 0, finished_total: 0, today_finished: 0, rework_total: 0, average_duration_hours: 0, total_cost: 0 },
+  callback: { total: 0, pending_total: 0, contacted_total: 0, qualified_total: 0, unqualified_total: 0, overdue_total: 0, rework_total: 0 },
   fault_by_type: [],
   fault_by_level: [],
   top_roads: [],
@@ -171,6 +201,20 @@ const faultStatusItems = computed(() =>
 
 const pendingCount = computed(() => overview.value.fault.by_status?.pending ?? 0)
 const processingCount = computed(() => overview.value.fault.by_status?.processing ?? 0)
+
+// 回访任务状态分布(待回访/已联系待判定/合格/不合格)。
+const callbackStatusItems = computed(() =>
+  Object.entries(CALLBACK_STATUS).map(([key, item]) => ({
+    label: item.label,
+    count: overview.value.callback?.[`${key}_total`] ?? 0,
+  })),
+)
+
+// 回访待办 = 待回访 + 已联系待判定 + 已触发返修等待重新回访。
+const callbackOpen = computed(() => {
+  const cb = overview.value.callback ?? {}
+  return (cb.pending_total ?? 0) + (cb.contacted_total ?? 0) + (cb.unqualified_total ?? 0)
+})
 
 async function load() {
   loading.value = true
